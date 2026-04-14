@@ -1,28 +1,35 @@
 """
 signals.py — Shared signal list definitions.
 
-Each list represents the fields of one hardware structure as they appear in
-the flattened Chisel-generated signal names. The generator uses these to
-build both the SV declarations and the hierarchical assign statements.
+Each list represents the fields of one hardware structure. Entries are either:
+  - str              : struct field name == DUT suffix  (plain, 1-to-1)
+  - tuple[str, str]  : (struct_field, dut_suffix)       when Chisel wraps the
+                       bundle and the names diverge (e.g. Valid wrapper adds
+                       'bits_' on the DUT side but the struct field is plain).
 
-Guidelines:
-  - Keep lists in the same field order as the corresponding SV struct/package.
-  - Use add_valid() for wrappers that prepend a Chisel 'valid' bit (e.g. in_uop).
-  - Add new lists here when a new struct type is introduced in boom_param_pkg.sv.
+Helpers
+-------
+valid_wrap(signals)
+    Wraps a plain signal list for use with Chisel's Valid bundle:
+      - adds a plain "valid" entry (struct field == DUT suffix, no prefix)
+      - maps every other field as ("field", "bits_field")
+    Result: .in_uop.valid = ...io_in_uop_valid
+            .in_uop.pdst  = ...io_in_uop_bits_pdst
 """
 
+Signal = str | tuple[str, str]
 
-def add_valid(signals: list[str]) -> list[str]:
-    """Prepend 'valid' and prefix all others with 'bits_', matching Chisel bundle flattening."""
-    return ["valid"] + [f"bits_{s}" for s in signals]
+
+def valid_wrap(signals: list[str]) -> list[Signal]:
+    """Encode a signal list for a Chisel Valid-wrapped bundle."""
+    return ["valid"] + [(s, f"bits_{s}") for s in signals]
 
 
 # ---------------------------------------------------------------------------
-# UOP signals
-# Full field list for uop_t, in struct declaration order.
+# UOP signals — field list for uop_t, in struct declaration order
 # ---------------------------------------------------------------------------
 
-UOP_SIGNALS: list[str] = [
+UOP_SIGNALS: list[Signal] = [
     "bp_debug_if",
     "bp_xcpt_if",
     "br_mask",
@@ -103,15 +110,14 @@ UOP_SIGNALS: list[str] = [
     "xcpt_pf_if",
 ]
 
-# UOP with Chisel valid wrapper (used for in_uop port)
-UOP_SIGNALS_VALID: list[str] = add_valid(UOP_SIGNALS)
+# UOP wrapped in Chisel's Valid bundle (e.g. io_in_uop_bits_pdst -> .in_uop.pdst)
+UOP_SIGNALS_VALID: list[Signal] = valid_wrap(UOP_SIGNALS)
 
 # ---------------------------------------------------------------------------
-# Slot flat signals
-# Top-level control signals of an issue slot (not inside a sub-struct).
+# Issue slot flat signals — top-level control, not inside a sub-struct
 # ---------------------------------------------------------------------------
 
-SLOT_FLAT_SIGNALS: list[str] = [
+SLOT_FLAT_SIGNALS: list[Signal] = [
     "valid",
     "will_be_valid",
     "request",
@@ -121,11 +127,12 @@ SLOT_FLAT_SIGNALS: list[str] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Untaint broadcast bus (ubbmsg_t)
+# Untaint broadcast bus — ubbmsg_t
+# Chisel flattens valid/bits_ here too, struct fields are plain.
 # ---------------------------------------------------------------------------
 
-UBB_SIGNALS: list[str] = [
+UBB_SIGNALS: list[Signal] = [
     "valid",
-    "bits_preg",
-    "bits_is_fp",
+    ("preg",  "bits_preg"),
+    ("is_fp", "bits_is_fp"),
 ]
