@@ -16,9 +16,10 @@ The tuple form is needed whenever the Chisel-generated name differs from the
 SV struct field name — most commonly with Valid-wrapped bundles, where Chisel
 adds a 'bits_' prefix on the DUT side but the struct field is plain.
 
-Example:
-    ("pdst", "bits_pdst")   =>   .in_uop.pdst = ...io_in_uop_bits_pdst;
-    "pdst"                  =>   .uop.pdst    = ...io_uop_pdst;
+Scalar vs. array blocks
+-----------------------
+  n_entries > 1 : array block — LHS uses sv_var[e], dut_path gets index appended
+  n_entries == 1 : scalar block — LHS uses sv_var directly, dut_path used as-is
 """
 
 import re
@@ -88,24 +89,43 @@ def expand_groups(groups: list[GroupTuple]) -> list[ExpandedGroup]:
 
 
 # ---------------------------------------------------------------------------
-# LHS builder
+# LHS / RHS builders — scalar vs. array aware
 # ---------------------------------------------------------------------------
 
-def _lhs(struct_name: str, entry: int, group: ExpandedGroup, struct_field: str) -> str:
-    """Build the full left-hand side string for one assign statement."""
+def _lhs(block: BlockConfig, entry: int | None, group: ExpandedGroup, struct_field: str) -> str:
+    """
+    Build the LHS for one assign statement.
+    entry=None means scalar block (no index on sv_var).
+    """
+    base       = block.sv_var if entry is None else f"{block.sv_var}[{entry}]"
     field_path = f".{group.struct_field}" if group.struct_field else ""
-    return f"assign {struct_name}[{entry}]{field_path}.{struct_field}"
+    return f"assign {base}{field_path}.{struct_field}"
+
+
+def _dut_base(block: BlockConfig, entry: int | None) -> str:
+    """
+    Build the RHS path prefix for one entry.
+    Scalar blocks use dut_path as-is; array blocks append the index.
+    """
+    if entry is None:
+        return block.dut_path
+    return f"{block.dut_path}{entry}."
 
 
 # ---------------------------------------------------------------------------
 # Width computation
 # ---------------------------------------------------------------------------
 
+def _entries(block: BlockConfig) -> list[int | None]:
+    """Return the entry list: [None] for scalars, [0..n-1] for arrays."""
+    return [None] if block.n_entries == 1 else list(range(block.n_entries))
+
+
 def compute_lhs_width(block: BlockConfig, expanded: list[ExpandedGroup]) -> int:
     """Return the maximum LHS length across all assignments in this block."""
     return max(
-        len(_lhs(block.sv_var, e, g, _resolve(sig)[0]))
-        for e in range(block.n_entries)
+        len(_lhs(block, e, g, _resolve(sig)[0]))
+        for e in _entries(block)
         for g in expanded
         for sig in g.signals
     )
@@ -119,20 +139,22 @@ def emit_block(block: BlockConfig, indent: str = "  ") -> str:
     """
     Emit all assign statements for one BlockConfig as a single string.
 
-    For each signal, the LHS uses the struct field name and the RHS uses the
-    DUT suffix — these may differ for Valid-wrapped bundles (tuple encoding).
+    Scalar blocks (n_entries == 1) emit sv_var.field = dut_path.signal with
+    no array index. Array blocks emit sv_var[e].field = dut_path{e}.signal.
     """
     inner    = indent + "  "
     expanded = expand_groups(block.groups)
     col_w    = compute_lhs_width(block, expanded)
+    entries  = _entries(block)
 
     lines: list[str] = []
 
-    for e in range(block.n_entries):
-        dut_base = f"{block.dut_path}{e}."
-        lines.append(f"{indent}// {block.sv_comment} — entry {e}")
+    for e in entries:
+        label = block.sv_comment if e is None else f"{block.sv_comment} — entry {e}"
+        lines.append(f"{indent}// {label}")
 
         seen_labels: set[str] = set()
+        dut_base = _dut_base(block, e)
 
         for g in expanded:
             if g.label not in seen_labels:
@@ -141,7 +163,7 @@ def emit_block(block: BlockConfig, indent: str = "  ") -> str:
 
             for sig in g.signals:
                 sf, dut_sfx = _resolve(sig)
-                lhs = _lhs(block.sv_var, e, g, sf)
+                lhs = _lhs(block, e, g, sf)
                 rhs = f"{dut_base}{g.sv_prefix}{dut_sfx}"
                 lines.append(f"{inner}{lhs:<{col_w}} = {rhs};")
 

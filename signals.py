@@ -136,3 +136,24 @@ UBB_SIGNALS: list[Signal] = [
     ("preg",  "bits_preg"),
     ("is_fp", "bits_is_fp"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Rename stage maptable: entries — maptable_t
+# ---------------------------------------------------------------------------
+
+MAPTABLE_SIGNALS: list[Signal] = [
+    "preg",
+    "taint",
+]
+
+# ---------------------------------------------------------------------------
+# Rename stage maptable: remap requests — maptable_t
+# ---------------------------------------------------------------------------
+
+REMAP_REQS_SIGNALS: list[Signal] = [
+    "ldst",
+    "pdst",
+    "valid",
+    "taint",
+]

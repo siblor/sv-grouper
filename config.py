@@ -2,36 +2,35 @@
 config.py — Hardware block descriptors for grouper.sv generation.
 
 This is the primary file to edit when adding or modifying grouped signal blocks.
-Each BlockConfig describes one SV array variable: its type, dimension, the path
-to the DUT signals, and how fields are grouped under that variable.
+Each BlockConfig describes one SV variable: its type, the path to DUT signals,
+and how fields are grouped under that variable.
 
 Structure overview
 ------------------
 BlockConfig:
-    sv_var      : str               Name of the SV variable to declare and drive.
-    sv_type     : str               SV type for the declaration (e.g. "slot_t", "logic").
-    sv_dim      : str | None        Array dimension expression as written in SV
-                                    (e.g. "INT_SLOTS-1:0"). None for scalars (not yet used).
-    sv_comment  : str               Comment printed above the declaration and assignment block.
-    n_entries   : int               Number of entries to unroll (must match sv_dim at runtime).
-    dut_path    : str               Hierarchical path prefix, with trailing '_' before the
-                                    index. The index {e} is inserted automatically.
-                                    Example: "core.int_issue_unit.slots_" → slots_0, slots_1…
-    groups      : list[GroupTuple]  See GroupTuple below.
+    sv_var         : str               Name of the SV variable to declare and drive.
+    sv_type        : str               SV type (e.g. "slot_t", "ren_maptable_t").
+    sv_comment     : str               Printed above the declaration and assignment block.
+    n_entries      : int               Entries to unroll.
+                                         > 1 : array — declares sv_var [n-1:0], iterates entries
+                                        == 1 : scalar — declares sv_var (no index), emits once
+    sv_dim_comment : str | None        Optional pkg param name shown as inline comment on the
+                                       declaration (e.g. "INT_SLOTS"). Informational only.
+    dut_path       : str               Hierarchical DUT path prefix.
+                                         Array  : trailing '_', index appended automatically
+                                                  e.g. "core.int_issue_unit.slots_" -> slots_0
+                                         Scalar : used as-is (may end with '.')
+                                                  e.g. "core.rename_stage.maptable."
+    groups         : list[GroupTuple]  See GroupTuple below.
 
 GroupTuple: (struct_field, sv_port_prefix, signals, label)
-    struct_field   : str   Field path within sv_var[i] (e.g. "uop", "in_uop").
-                           Empty string "" for signals accessed directly on sv_var[i].
+    struct_field   : str   Field path within the SV variable (e.g. "uop", "maptable[0..31]").
+                           Empty string "" for signals at the top level of sv_var.
+                           Range notation "[a..b]" expands into one group per index.
     sv_port_prefix : str   Chisel-generated prefix on the DUT side (e.g. "io_uop_").
-                           May contain {i} for range-expanded groups.
-    signals        : list  Signal names (suffix after sv_port_prefix on DUT,
-                           and after struct_field on the LHS).
-    label          : str   Section comment label printed above each group's assignments.
-
-Range expansion
----------------
-A struct_field containing "[a..b]" (e.g. "untaint_resp[0..4]") is expanded into
-one group per index, substituting {i} in sv_port_prefix automatically.
+                           Use {i} for range-expanded groups.
+    signals        : list  Signal entries — str for 1-to-1, tuple[str,str] for remapped names.
+    label          : str   Section comment label.
 
 Adding a new block
 ------------------
@@ -43,26 +42,21 @@ Adding a new block
 
 from dataclasses import dataclass, field
 
-from signals import (
-    SLOT_FLAT_SIGNALS,
-    UBB_SIGNALS,
-    UOP_SIGNALS,
-    UOP_SIGNALS_VALID,
-)
+from signals import *
 
 # A group within a block: (struct_field, sv_port_prefix, signals, label)
-GroupTuple = tuple[str, str, list[str], str]
+GroupTuple = tuple[str, str, list, str]
 
 
 @dataclass
 class BlockConfig:
-    sv_var:     str
-    sv_type:    str
-    sv_dim:     str | None
-    sv_comment: str
-    n_entries:  int
-    dut_path:   str
-    groups:     list[GroupTuple] = field(default_factory=list)
+    sv_var:         str
+    sv_type:        str
+    sv_comment:     str
+    n_entries:      int
+    dut_path:       str
+    groups:         list[GroupTuple] = field(default_factory=list)
+    sv_dim_comment: str | None = None  # e.g. "INT_SLOTS" — shown as inline comment only
 
 
 # =============================================================================
@@ -75,41 +69,40 @@ BLOCKS: list[BlockConfig] = [
     # Integer issue slots
     # -------------------------------------------------------------------------
     BlockConfig(
-        sv_var     = "int_slots",
-        sv_type    = "slot_t",
-        sv_dim     = "INT_SLOTS-1:0",
-        sv_comment = "Integer issue slots",
-        n_entries  = 20,
-        dut_path   = "core.int_issue_unit.slots_",
+        sv_var         = "int_slots",
+        sv_type        = "slot_t",
+        sv_comment     = "Integer issue slots",
+        n_entries      = 20,
+        sv_dim_comment = "INT_SLOTS",
+        dut_path       = "core.int_issue_unit.slots_",
+        groups         = [
+            # struct_field             sv_port_prefix          signals             label
+            ("",                       "io_",                  SLOT_FLAT_SIGNALS,  "flat"),
+            ("uop",                    "io_uop_",              UOP_SIGNALS,        "uop"),
+            ("in_uop",                 "io_in_uop_",           UOP_SIGNALS_VALID,  "in_uop"),
+            ("out_uop",                "io_out_uop_",          UOP_SIGNALS,        "out_uop"),
+            ("untaint_resp[0..4]",     "io_untaint_resp_{i}_", UBB_SIGNALS,        "untaint_resp"),
+            ("untaint_req",            "io_untaint_req_",      UBB_SIGNALS,        "untaint_req"),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Rename stage — map table (scalar: one struct, no entry index)
+    # -------------------------------------------------------------------------
+    BlockConfig(
+        sv_var     = "maptable",
+        sv_type    = "ren_maptable_t",
+        sv_comment = "Rename stage — map table",
+        n_entries  = 1,
+        dut_path   = "core.rename_stage.maptable.",
         groups     = [
-            # struct_field      sv_port_prefix        signals             label
-            ("",                "io_",                SLOT_FLAT_SIGNALS,  "flat"),
-            ("uop",             "io_uop_",            UOP_SIGNALS,        "uop"),
-            ("in_uop",          "io_in_uop_",         UOP_SIGNALS_VALID,  "in_uop"),
-            ("out_uop",         "io_out_uop_",        UOP_SIGNALS,        "out_uop"),
-            ("untaint_resp[0..4]", "io_untaint_resp_{i}_", UBB_SIGNALS,  "untaint_resp"),
-            ("untaint_req",     "io_untaint_req_",    UBB_SIGNALS,        "untaint_req"),
+            # struct_field          sv_port_prefix          signals                 label
+            ("maptable[0..31]",     "map_table_{i}_",       MAPTABLE_SIGNALS,       "maptable entries"),
+            ("remap_reqs[0..1]",    "io_remap_reqs_{i}_",   REMAP_REQS_SIGNALS,     "remap requests"),
         ],
     ),
 
     # -------------------------------------------------------------------------
     # Add further blocks here following the same pattern.
-    #
-    # Example (memory slots — uncomment and adjust when ready):
-    #
-    # BlockConfig(
-    #     sv_var     = "mem_slots",
-    #     sv_type    = "slot_t",
-    #     sv_dim     = "MEM_SLOTS-1:0",
-    #     sv_comment = "Memory issue slots",
-    #     n_entries  = 12,
-    #     dut_path   = "core.mem_issue_unit.slots_",
-    #     groups     = [
-    #         ("",       "io_",         SLOT_FLAT_SIGNALS, "flat"),
-    #         ("uop",    "io_uop_",     UOP_SIGNALS,       "uop"),
-    #         ("in_uop", "io_in_uop_",  UOP_SIGNALS_VALID, "in_uop"),
-    #         ("out_uop","io_out_uop_", UOP_SIGNALS,       "out_uop"),
-    #     ],
-    # ),
     # -------------------------------------------------------------------------
 ]

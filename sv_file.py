@@ -30,13 +30,15 @@ def _declaration(block: BlockConfig) -> str:
     """Format a single variable declaration line."""
     type_field = f"{block.sv_type:<{_DECL_TYPE_COL}}"
     var_field  = f"{block.sv_var:<{_DECL_VAR_COL}}"
-    dim        = f" [{block.sv_dim}]" if block.sv_dim else ""
-    return f"  {type_field} {var_field}{dim};"
+    dim        = f" [{block.n_entries - 1}:0]" if block.n_entries > 1 else ""
+    comment    = f"  // {block.sv_dim_comment}" if block.sv_dim_comment else ""
+    var_col = var_field if dim else var_field.rstrip()
+    return f"  {type_field} {var_col}{dim};{comment}"
 
 
 def _declarations_section(blocks: list[BlockConfig]) -> str:
     """Emit all variable declarations, grouped with a comment header."""
-    lines = ["  // Grouped signal arrays — one entry per DUT instance"]
+    lines = ["  // Grouped signal variables"]
     for block in blocks:
         lines.append(f"  // {block.sv_comment}")
         lines.append(_declaration(block))
