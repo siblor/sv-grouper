@@ -105,10 +105,21 @@ def _lhs(block: BlockConfig, entry: int | None, group: ExpandedGroup, struct_fie
 def _dut_base(block: BlockConfig, entry: int | None) -> str:
     """
     Build the RHS path prefix for one entry.
-    Scalar blocks use dut_path as-is; array blocks append the index.
+
+    dut_path may contain {e} as an explicit index placeholder, which allows
+    full control over the separator and position:
+        "lsu.ldq_{e}."                ->  lsu.ldq_15.
+        "core.int_issue_unit.slots_{e}."  ->  core.int_issue_unit.slots_3.
+
+    Legacy paths without {e} are handled automatically:
+        scalar (entry=None) : used as-is
+        array               : index appended directly (old behaviour)
     """
     if entry is None:
         return block.dut_path
+    if "{e}" in block.dut_path:
+        return block.dut_path.format(e=entry)
+    # Legacy fallback: bare path + index + dot
     return f"{block.dut_path}{entry}."
 
 
@@ -158,7 +169,8 @@ def emit_block(block: BlockConfig, indent: str = "  ") -> str:
 
         for g in expanded:
             if g.label not in seen_labels:
-                lines.append(f"{inner}// {g.label}")
+                if g.label:  # empty label suppresses the comment line
+                    lines.append(f"{inner}// {g.label}")
                 seen_labels.add(g.label)
 
             for sig in g.signals:

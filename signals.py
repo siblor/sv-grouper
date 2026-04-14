@@ -157,3 +157,48 @@ REMAP_REQS_SIGNALS: list[Signal] = [
     "valid",
     "taint",
 ]
+
+# ---------------------------------------------------------------------------
+# LDQ flat signals — top-level control, not inside a sub-struct
+# ---------------------------------------------------------------------------
+
+LDQ_FLAT_SIGNALS: list[Signal] = [
+    "valid",
+    ("addr_valid"         , "bits_addr_valid"),
+    ("addr"               , "bits_addr_bits"),
+    ("addr_is_virtual"    , "bits_addr_is_virtual"),
+    ("addr_is_uncacheable", "bits_addr_is_uncacheable"),
+    ("executed"           , "bits_executed"),
+    ("succeeded"          , "bits_succeeded"),
+    ("failure"            , "bits_failure"),
+    ("order_fail"         , "bits_order_fail"),
+    ("observed"           , "bits_observed"),
+    ("st_dep_mask"        , "bits_st_dep_mask"),
+    ("youngest_stq_idx"   , "bits_youngest_stq_idx"),
+    ("forward_std_val"    , "bits_forward_std_val"),
+    ("forward_stq_idx"    , "bits_forward_stq_idx"),
+    ("fwd_untaint"        , "bits_fwd_untaint"),
+    ("addr_reg"           , "bits_uop_prs1"),
+    ("addr_taint"         , "bits_uop_rs1_taint"),
+    ("data_reg"           , "bits_uop_pdst"),
+    ("data_taint"         , "bits_uop_dst_taint"),
+]
+
+# ---------------------------------------------------------------------------
+# STQ flat signals — top-level control, not inside a sub-struct
+# ---------------------------------------------------------------------------
+
+STQ_FLAT_SIGNALS: list[Signal] = [
+    "valid",
+    ("addr_valid"         , "bits_addr_valid"),
+    ("addr"               , "bits_addr_bits"),
+    ("addr_is_virtual"    , "bits_addr_is_virtual"),
+    ("data"               , "bits_data"),
+    ("committed"          , "bits_comitted"),
+    ("succeeded"          , "bits_succeeded"),
+    ("fwd_untaint"        , "bits_fwd_untaint"),
+    ("addr_reg"           , "bits_uop_prs1"),
+    ("addr_taint"         , "bits_uop_rs1_taint"),
+    ("data_reg"           , "bits_uop_prs2"),
+    ("data_taint"         , "bits_uop_rs2_taint"),
+]

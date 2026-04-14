@@ -17,20 +17,22 @@ BlockConfig:
     sv_dim_comment : str | None        Optional pkg param name shown as inline comment on the
                                        declaration (e.g. "INT_SLOTS"). Informational only.
     dut_path       : str               Hierarchical DUT path prefix.
-                                         Array  : trailing '_', index appended automatically
-                                                  e.g. "core.int_issue_unit.slots_" -> slots_0
-                                         Scalar : used as-is (may end with '.')
-                                                  e.g. "core.rename_stage.maptable."
+                                       Use {e} as the explicit index placeholder — this gives
+                                       full control over the separator character and position:
+                                         "core.int_issue_unit.slots_{e}."  ->  slots_3.signal
+                                         "lsu.ldq_{e}."                   ->  ldq_15.signal
+                                       Scalar blocks (n_entries==1): {e} is unused; path as-is.
+                                       Legacy paths without {e} still work (index appended).
     groups         : list[GroupTuple]  See GroupTuple below.
 
 GroupTuple: (struct_field, sv_port_prefix, signals, label)
     struct_field   : str   Field path within the SV variable (e.g. "uop", "maptable[0..31]").
                            Empty string "" for signals at the top level of sv_var.
                            Range notation "[a..b]" expands into one group per index.
-    sv_port_prefix : str   Chisel-generated prefix on the DUT side (e.g. "io_uop_").
+    sv_port_prefix : str   Chisel-generated prefix appended after dut_path on the DUT side.
                            Use {i} for range-expanded groups.
     signals        : list  Signal entries — str for 1-to-1, tuple[str,str] for remapped names.
-    label          : str   Section comment label.
+    label          : str   Section comment label (empty string suppresses the comment line).
 
 Adding a new block
 ------------------
@@ -74,7 +76,7 @@ BLOCKS: list[BlockConfig] = [
         sv_comment     = "Integer issue slots",
         n_entries      = 20,
         sv_dim_comment = "INT_SLOTS",
-        dut_path       = "core.int_issue_unit.slots_",
+        dut_path       = "core.int_issue_unit.slots_{e}.",
         groups         = [
             # struct_field             sv_port_prefix          signals             label
             ("",                       "io_",                  SLOT_FLAT_SIGNALS,  "flat"),
@@ -99,6 +101,40 @@ BLOCKS: list[BlockConfig] = [
             # struct_field          sv_port_prefix          signals                 label
             ("maptable[0..31]",     "map_table_{i}_",       MAPTABLE_SIGNALS,       "maptable entries"),
             ("remap_reqs[0..1]",    "io_remap_reqs_{i}_",   REMAP_REQS_SIGNALS,     "remap requests"),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Load Queue
+    # -------------------------------------------------------------------------
+    BlockConfig(
+        sv_var         = "ldq",
+        sv_type        = "ldq_t",
+        sv_comment     = "Load Queue",
+        n_entries      = 16,
+        sv_dim_comment = "LDQ_SZ",
+        dut_path       = "lsu.ldq_{e}_",
+        groups         = [
+            # struct_field             sv_port_prefix   signals             label
+            ("",                       "",              LDQ_FLAT_SIGNALS,   ""),
+            ("uop",                    "bits_uop_",     UOP_SIGNALS,        "uop"),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Store Queue
+    # -------------------------------------------------------------------------
+    BlockConfig(
+        sv_var         = "stq",
+        sv_type        = "stq_t",
+        sv_comment     = "Store Queue",
+        n_entries      = 16,
+        sv_dim_comment = "STQ_SZ",
+        dut_path       = "lsu.stq_{e}_",
+        groups         = [
+            # struct_field             sv_port_prefix   signals             label
+            ("",                       "",              STQ_FLAT_SIGNALS,   ""),
+            ("uop",                    "bits_uop_",     UOP_SIGNALS,        "uop"),
         ],
     ),
 
