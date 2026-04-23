@@ -6,16 +6,6 @@ Responsibilities:
   - Compute LHS column width for aligned assignments
   - Emit the assign block for one BlockConfig
 
-Signal encoding
----------------
-A signal entry in a group's signal list is either:
-  - str                  : struct field name == DUT suffix  (1-to-1, common case)
-  - tuple[str, str]      : (struct_field, dut_suffix)       (explicit mapping)
-
-The tuple form is needed whenever the Chisel-generated name differs from the
-SV struct field name — most commonly with Valid-wrapped bundles, where Chisel
-adds a 'bits_' prefix on the DUT side but the struct field is plain.
-
 Scalar vs. array blocks
 -----------------------
   n_entries > 1 : array block — LHS uses sv_var[e], dut_path gets index appended
@@ -26,16 +16,7 @@ import re
 from dataclasses import dataclass
 
 from config import BlockConfig, GroupTuple
-
-# A signal entry: plain name (1-to-1) or (struct_field, dut_suffix) pair
-Signal = str | tuple[str, str]
-
-
-def _resolve(sig: Signal) -> tuple[str, str]:
-    """Return (struct_field, dut_suffix) for any signal encoding."""
-    if isinstance(sig, tuple):
-        return sig
-    return sig, sig
+from types_ import Signal, resolve as _resolve
 
 
 # ---------------------------------------------------------------------------

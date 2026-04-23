@@ -89,18 +89,32 @@ BLOCKS: list[BlockConfig] = [
     ),
 
     # -------------------------------------------------------------------------
-    # Rename stage — map table (scalar: one struct, no entry index)
+    # Rename stage — map table 
     # -------------------------------------------------------------------------
     BlockConfig(
         sv_var     = "maptable",
-        sv_type    = "ren_maptable_t",
-        sv_comment = "Rename stage — map table",
-        n_entries  = 1,
-        dut_path   = "core.rename_stage.maptable.",
+        sv_type    = "maptable_t",
+        sv_comment = "Maptable",
+        n_entries  = 32,
+        dut_path   = "core.rename_stage.maptable.map_table_{e}_",
         groups     = [
             # struct_field          sv_port_prefix          signals                 label
-            ("maptable[0..31]",     "map_table_{i}_",       MAPTABLE_SIGNALS,       "maptable entries"),
-            ("remap_reqs[0..1]",    "io_remap_reqs_{i}_",   REMAP_REQS_SIGNALS,     "remap requests"),
+            ("",                    "",                     MAPTABLE_SIGNALS,       ""),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Rename stage — remap requests
+    # -------------------------------------------------------------------------
+    BlockConfig(
+        sv_var     = "remap_reqs",
+        sv_type    = "remap_req_t",
+        sv_comment = "Remap requests",
+        n_entries  = 2,
+        dut_path   = "core.rename_stage.maptable.io_remap_reqs_{e}_",
+        groups     = [
+            # struct_field          sv_port_prefix          signals                 label
+            ("",                    "",                     REMAP_REQS_SIGNALS,     ""),
         ],
     ),
 
@@ -117,7 +131,7 @@ BLOCKS: list[BlockConfig] = [
         groups         = [
             # struct_field             sv_port_prefix   signals             label
             ("",                       "",              LDQ_FLAT_SIGNALS,   ""),
-            ("uop",                    "bits_uop_",     UOP_SIGNALS,        "uop"),
+            ("uop",                    "bits_uop_",     UOP_LSU_SIGNALS,    "uop"),
         ],
     ),
 
@@ -134,7 +148,23 @@ BLOCKS: list[BlockConfig] = [
         groups         = [
             # struct_field             sv_port_prefix   signals             label
             ("",                       "",              STQ_FLAT_SIGNALS,   ""),
-            ("uop",                    "bits_uop_",     UOP_SIGNALS,        "uop"),
+            ("uop",                    "bits_uop_",     UOP_LSU_SIGNALS,    "uop"),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
+    # Untaint Broadcast Bus
+    # -------------------------------------------------------------------------
+    BlockConfig(
+        sv_var         = "ubb",
+        sv_type        = "ubbmsg_t",
+        sv_comment     = "Untaint Broadcast Bus",
+        n_entries      = 5,
+        sv_dim_comment = "UBB_W",
+        dut_path       = "core.global_untaint_broadcast_{e}_",
+        groups         = [
+            # struct_field             sv_port_prefix   signals             label
+            ("",                       "",              UBB_SIGNALS,        ""),
         ],
     ),
 
@@ -142,3 +172,4 @@ BLOCKS: list[BlockConfig] = [
     # Add further blocks here following the same pattern.
     # -------------------------------------------------------------------------
 ]
+

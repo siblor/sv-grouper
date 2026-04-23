@@ -10,14 +10,20 @@ Each list represents the fields of one hardware structure. Entries are either:
 Helpers
 -------
 valid_wrap(signals)
-    Wraps a plain signal list for use with Chisel's Valid bundle:
-      - adds a plain "valid" entry (struct field == DUT suffix, no prefix)
-      - maps every other field as ("field", "bits_field")
-    Result: .in_uop.valid = ...io_in_uop_valid
-            .in_uop.pdst  = ...io_in_uop_bits_pdst
+    Wraps a signal list for use with a Chisel Valid bundle:
+      - adds a plain "valid" entry  (struct field == DUT suffix)
+      - maps every other field as   ("field", "bits_field")
+
+uop_subset(exclude)
+    Returns UOP_SIGNALS with the named struct fields removed.
+    Use this to build context-specific uop lists (e.g. LSU uop) where Chisel
+    has optimised away unused fields, rather than maintaining a full duplicate.
+
+    Example:
+        UOP_LSU_SIGNALS = uop_subset(exclude=["broadcast_queue", "iw_state", ...])
 """
 
-Signal = str | tuple[str, str]
+from types_ import Signal, resolve
 
 
 def valid_wrap(signals: list[str]) -> list[Signal]:
@@ -25,8 +31,19 @@ def valid_wrap(signals: list[str]) -> list[Signal]:
     return ["valid"] + [(s, f"bits_{s}") for s in signals]
 
 
+def uop_subset(exclude: list[str]) -> list[Signal]:
+    """
+    Return UOP_SIGNALS with the named struct fields removed.
+    Excluded names are matched against the struct field name (LHS), so plain
+    strings and the first element of tuples are both handled correctly.
+    """
+    excluded = set(exclude)
+    return [s for s in UOP_SIGNALS if resolve(s)[0] not in excluded]
+
+
 # ---------------------------------------------------------------------------
-# UOP signals — field list for uop_t, in struct declaration order
+# UOP signals — complete field list for uop_t, in struct declaration order.
+# This is the single source of truth; all other uop lists derive from it.
 # ---------------------------------------------------------------------------
 
 UOP_SIGNALS: list[Signal] = [
@@ -113,6 +130,27 @@ UOP_SIGNALS: list[Signal] = [
 # UOP wrapped in Chisel's Valid bundle (e.g. io_in_uop_bits_pdst -> .in_uop.pdst)
 UOP_SIGNALS_VALID: list[Signal] = valid_wrap(UOP_SIGNALS)
 
+# UOP fields present in LSU (LDQ/STQ) uops — Chisel removes unused fields.
+# To update: run the tool, check which hierarchical references fail in simulation,
+# add the missing signal names to this exclude list, and regenerate.
+UOP_LSU_SIGNALS: list[Signal] = uop_subset(exclude=[
+    "broadcast_queue",
+    "csr_addr",
+    "debug_tsrc",
+    "det",
+    "inv_type",
+    "iw_p1_poisoned",
+    "iw_p2_poisoned",
+    "iw_state",
+    "ldst_is_rs1",
+    "ppred",
+    "ppred_busy",
+    "prs3",
+    "prs3_busy",
+    "rxq_idx",
+    "xcpt_ma_if",
+])
+
 # ---------------------------------------------------------------------------
 # Issue slot flat signals — top-level control, not inside a sub-struct
 # ---------------------------------------------------------------------------
@@ -123,12 +161,12 @@ SLOT_FLAT_SIGNALS: list[Signal] = [
     "request",
     "grant",
     "kill",
+    "clear",
     "ldspec_miss",
 ]
 
 # ---------------------------------------------------------------------------
 # Untaint broadcast bus — ubbmsg_t
-# Chisel flattens valid/bits_ here too, struct fields are plain.
 # ---------------------------------------------------------------------------
 
 UBB_SIGNALS: list[Signal] = [
@@ -137,9 +175,8 @@ UBB_SIGNALS: list[Signal] = [
     ("is_fp", "bits_is_fp"),
 ]
 
-
 # ---------------------------------------------------------------------------
-# Rename stage maptable: entries — maptable_t
+# Rename stage — maptable entry (maptable_t)
 # ---------------------------------------------------------------------------
 
 MAPTABLE_SIGNALS: list[Signal] = [
@@ -148,7 +185,7 @@ MAPTABLE_SIGNALS: list[Signal] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Rename stage maptable: remap requests — maptable_t
+# Rename stage — remap request (remap_req_t)
 # ---------------------------------------------------------------------------
 
 REMAP_REQS_SIGNALS: list[Signal] = [
@@ -159,46 +196,47 @@ REMAP_REQS_SIGNALS: list[Signal] = [
 ]
 
 # ---------------------------------------------------------------------------
-# LDQ flat signals — top-level control, not inside a sub-struct
+# Load Queue flat signals (ldq_t) — non-uop fields
 # ---------------------------------------------------------------------------
 
 LDQ_FLAT_SIGNALS: list[Signal] = [
     "valid",
-    ("addr_valid"         , "bits_addr_valid"),
-    ("addr"               , "bits_addr_bits"),
-    ("addr_is_virtual"    , "bits_addr_is_virtual"),
+    ("addr_valid",          "bits_addr_valid"),
+    ("addr",                "bits_addr_bits"),
+    ("addr_is_virtual",     "bits_addr_is_virtual"),
     ("addr_is_uncacheable", "bits_addr_is_uncacheable"),
-    ("executed"           , "bits_executed"),
-    ("succeeded"          , "bits_succeeded"),
-    ("failure"            , "bits_failure"),
-    ("order_fail"         , "bits_order_fail"),
-    ("observed"           , "bits_observed"),
-    ("st_dep_mask"        , "bits_st_dep_mask"),
-    ("youngest_stq_idx"   , "bits_youngest_stq_idx"),
-    ("forward_std_val"    , "bits_forward_std_val"),
-    ("forward_stq_idx"    , "bits_forward_stq_idx"),
-    ("fwd_untaint"        , "bits_fwd_untaint"),
-    ("addr_reg"           , "bits_uop_prs1"),
-    ("addr_taint"         , "bits_uop_rs1_taint"),
-    ("data_reg"           , "bits_uop_pdst"),
-    ("data_taint"         , "bits_uop_dst_taint"),
+    ("executed",            "bits_executed"),
+    ("succeeded",           "bits_succeeded"),
+    ("failure",             "bits_failure"),
+    ("order_fail",          "bits_order_fail"),
+    ("observed",            "bits_observed"),
+    ("st_dep_mask",         "bits_st_dep_mask"),
+    ("youngest_stq_idx",    "bits_youngest_stq_idx"),
+    ("forward_std_val",     "bits_forward_std_val"),
+    ("forward_stq_idx",     "bits_forward_stq_idx"),
+    ("fwd_untaint",         "bits_fwd_untaint"),
+    ("addr_reg",            "bits_uop_prs1"),
+    ("addr_taint",          "bits_uop_rs1_taint"),
+    ("data_reg",            "bits_uop_pdst"),
+    ("data_taint",          "bits_uop_dst_taint"),
 ]
 
 # ---------------------------------------------------------------------------
-# STQ flat signals — top-level control, not inside a sub-struct
+# Store Queue flat signals (stq_t) — non-uop fields
 # ---------------------------------------------------------------------------
 
 STQ_FLAT_SIGNALS: list[Signal] = [
     "valid",
-    ("addr_valid"         , "bits_addr_valid"),
-    ("addr"               , "bits_addr_bits"),
-    ("addr_is_virtual"    , "bits_addr_is_virtual"),
-    ("data"               , "bits_data"),
-    ("committed"          , "bits_comitted"),
-    ("succeeded"          , "bits_succeeded"),
-    ("fwd_untaint"        , "bits_fwd_untaint"),
-    ("addr_reg"           , "bits_uop_prs1"),
-    ("addr_taint"         , "bits_uop_rs1_taint"),
-    ("data_reg"           , "bits_uop_prs2"),
-    ("data_taint"         , "bits_uop_rs2_taint"),
+    ("addr_valid",      "bits_addr_valid"),
+    ("addr",            "bits_addr_bits"),
+    ("addr_is_virtual", "bits_addr_is_virtual"),
+    ("data_valid",      "bits_data_valid"),
+    ("data",            "bits_data_bits"),
+    ("committed",       "bits_committed"),
+    ("succeeded",       "bits_succeeded"),
+    ("fwd_untaint",     "bits_fwd_untaint"),
+    ("addr_reg",        "bits_uop_prs1"),
+    ("addr_taint",      "bits_uop_rs1_taint"),
+    ("data_reg",        "bits_uop_prs2"),
+    ("data_taint",      "bits_uop_rs2_taint"),
 ]
