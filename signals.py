@@ -21,6 +21,18 @@ uop_subset(exclude)
 
     Example:
         UOP_LSU_SIGNALS = uop_subset(exclude=["broadcast_queue", "iw_state", ...])
+
+ctrl_sigs_t convention
+-----------------------
+ctrl_sigs_t is a named nested struct inside uop_t (field: uop.ctrl). It must
+be mapped as a separate group in every BlockConfig that includes a uop, using:
+
+    ("uop.ctrl", "<dut_prefix>ctrl_", CTRL_SIGNALS_x, "ctrl")
+
+Where CTRL_SIGNALS_x is the variant matching that port's Chisel optimisation.
+Blocks where Chisel has eliminated ctrl entirely simply omit this group.
+Do NOT add ctrl fields to UOP_SIGNALS — they live in a separate struct and
+require a separate DUT prefix.
 """
 
 from types_ import Signal, resolve
@@ -42,8 +54,10 @@ def uop_subset(exclude: list[str]) -> list[Signal]:
 
 
 # ---------------------------------------------------------------------------
-# UOP signals — complete field list for uop_t, in struct declaration order.
+# UOP signals — flat field list for uop_t, in struct declaration order.
 # This is the single source of truth; all other uop lists derive from it.
+# NOTE: ctrl_sigs_t (uop.ctrl) is intentionally excluded — it is a nested
+# struct that requires its own group and DUT prefix. See CTRL_SIGNALS_* below.
 # ---------------------------------------------------------------------------
 
 UOP_SIGNALS: list[Signal] = [
@@ -240,3 +254,114 @@ STQ_FLAT_SIGNALS: list[Signal] = [
     ("data_reg",        "bits_uop_prs2"),
     ("data_taint",      "bits_uop_rs2_taint"),
 ]
+
+# ---------------------------------------------------------------------------
+# Register Read flat signals — top-level control, not inside a sub-struct
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# ctrl_sigs_t — ALU control signals, nested as uop.ctrl in uop_t.
+#
+# Three variants reflecting Chisel's per-port optimisation. When adding a new
+# block whose uop includes ctrl, pair the "uop" group with one of these as:
+#   ("uop.ctrl", "<dut_prefix>ctrl_", CTRL_SIGNALS_x, "ctrl")
+# If ctrl is absent on a port, simply omit the group from the BlockConfig.
+#
+# CTRL_SIGNALS_0 : full  — br, op, imm, is_load/sta/std  (ALU/branch/mem port)
+# CTRL_SIGNALS_1 : slim  — br, op, imm only               (simple ALU port)
+# CTRL_SIGNALS_2 : slim+ — slim + csr_cmd                  (CSR port)
+# ---------------------------------------------------------------------------
+
+# Full ctrl — port 0 (ALU, branch, mem, full issue width)
+CTRL_SIGNALS_0: list[Signal] = [
+    "br_type",
+    "op1_sel",
+    "op2_sel",
+    "imm_sel",
+    "op_fcn",
+    "fcn_dw",
+    "is_load",
+    "is_sta",
+    "is_std",
+]
+
+# Trimmed ctrl — ports 1 (no load/store control)
+CTRL_SIGNALS_1: list[Signal] = [
+    "br_type",
+    "op1_sel",
+    "op2_sel",
+    "imm_sel",
+    "op_fcn",
+    "fcn_dw",
+]
+
+# Trimmed ctrl — port 2 (adds csr_cmd, no load/store control)
+CTRL_SIGNALS_2: list[Signal] = [
+    "br_type",
+    "op1_sel",
+    "op2_sel",
+    "imm_sel",
+    "op_fcn",
+    "fcn_dw",
+    "csr_cmd",
+]
+
+# ---------------------------------------------------------------------------
+# exe_req_t flat signals — valid + data buses.
+# NOTE: rs3_data, pred_data, and kill are defined in exe_req_t but were not
+# observed in the iregister_read signal dump. Add as tuples if confirmed.
+# ---------------------------------------------------------------------------
+
+EXE_REQ_FLAT_SIGNALS: list[Signal] = [
+    "valid",
+    ("rs1_data",   "bits_rs1_data"),
+    ("rs2_data",   "bits_rs2_data"),
+    # ("rs3_data",   "bits_rs3_data"),    # present in exe_req_t, trimmed in iregister_read
+    # ("pred_data",  "bits_pred_data"),   # present in exe_req_t, trimmed in iregister_read
+    # ("kill",       "kill"),             # present in exe_req_t, trimmed in iregister_read
+]
+
+# ---------------------------------------------------------------------------
+# Per-port UOP subsets for iregister_read exe_req outputs.
+# Chisel aggressively trims uop fields unused by each execution port.
+# Derived from the signal dump; update the exclude list if the RTL changes.
+#
+# Port 0 (irr_req_0) : ALU/branch/mem — richest uop, iw_p*_poisoned absent
+# Port 1 (irr_req_1) : simple ALU     — heavily trimmed, fp_val present
+# Port 2 (irr_req_2) : CSR            — same as port 1, fp_val also absent
+# ---------------------------------------------------------------------------
+
+UOP_EXE_REQ_0_SIGNALS: list[Signal] = uop_subset(exclude=[
+    "iw_p1_poisoned",
+    "iw_p2_poisoned",
+])
+
+UOP_EXE_REQ_1_SIGNALS: list[Signal] = uop_subset(exclude=[
+    "bp_debug_if", "bp_xcpt_if", "broadcast_queue", "csr_addr",
+    "debug_fsrc", "debug_inst", "debug_pc", "debug_tsrc", "det",
+    "dst_taint", "exc_cause", "exception", "flush_on_commit",
+    "fp_single", "frs3_en", "inst", "inv_type", "iq_type",
+    "is_fence", "is_fencei", "is_sys_pc2epc", "is_unique",
+    "iw_p1_poisoned", "iw_p2_poisoned", "iw_state",
+    "ldst", "ldst_is_rs1", "ldst_val",
+    "lrs1", "lrs1_rtype", "lrs2", "lrs2_rtype", "lrs3",
+    "mem_cmd", "mem_signed", "mem_size", "nonspec", "ppred", "ppred_busy",
+    "prs1_busy", "prs2", "prs2_busy", "prs3", "prs3_busy",
+    "rs1_taint", "rs2_taint", "rs3_taint", "rxq_idx", "stale_pdst",
+    "tx_regs", "uses_ldq", "xcpt_ae_if", "xcpt_ma_if", "xcpt_pf_if",
+])
+
+UOP_EXE_REQ_2_SIGNALS: list[Signal] = uop_subset(exclude=[
+    "bp_debug_if", "bp_xcpt_if", "broadcast_queue", "csr_addr",
+    "debug_fsrc", "debug_inst", "debug_pc", "debug_tsrc", "det",
+    "dst_taint", "exc_cause", "exception", "flush_on_commit",
+    "fp_single", "fp_val", "frs3_en", "inst", "inv_type", "iq_type",
+    "is_fence", "is_fencei", "is_sys_pc2epc", "is_unique",
+    "iw_p1_poisoned", "iw_p2_poisoned", "iw_state",
+    "ldst", "ldst_is_rs1", "ldst_val",
+    "lrs1", "lrs1_rtype", "lrs2", "lrs2_rtype", "lrs3",
+    "mem_cmd", "mem_signed", "mem_size", "nonspec", "ppred", "ppred_busy",
+    "prs1_busy", "prs2", "prs2_busy", "prs3", "prs3_busy",
+    "rs1_taint", "rs2_taint", "rs3_taint", "rxq_idx", "stale_pdst",
+    "tx_regs", "uses_ldq", "xcpt_ae_if", "xcpt_ma_if", "xcpt_pf_if",
+])

@@ -89,6 +89,27 @@ BLOCKS: list[BlockConfig] = [
     ),
 
     # -------------------------------------------------------------------------
+    # Memory issue slots
+    # -------------------------------------------------------------------------
+    BlockConfig(
+        sv_var         = "mem_slots",
+        sv_type        = "slot_t",
+        sv_comment     = "Memory issue slots",
+        n_entries      = 12,
+        sv_dim_comment = "MEM_SLOTS",
+        dut_path       = "core.mem_issue_unit.slots_{e}.",
+        groups         = [
+            # struct_field             sv_port_prefix          signals             label
+            ("",                       "io_",                  SLOT_FLAT_SIGNALS,  "flat"),
+            ("uop",                    "io_uop_",              UOP_SIGNALS,        "uop"),
+            ("in_uop",                 "io_in_uop_",           UOP_SIGNALS_VALID,  "in_uop"),
+            ("out_uop",                "io_out_uop_",          UOP_SIGNALS,        "out_uop"),
+            ("untaint_resp[0..4]",     "io_untaint_resp_{i}_", UBB_SIGNALS,        "untaint_resp"),
+            ("untaint_req",            "io_untaint_req_",      UBB_SIGNALS,        "untaint_req"),
+        ],
+    ),
+
+    # -------------------------------------------------------------------------
     # Rename stage — map table 
     # -------------------------------------------------------------------------
     BlockConfig(
@@ -129,9 +150,9 @@ BLOCKS: list[BlockConfig] = [
         sv_dim_comment = "LDQ_SZ",
         dut_path       = "lsu.ldq_{e}_",
         groups         = [
-            # struct_field             sv_port_prefix   signals             label
-            ("",                       "",              LDQ_FLAT_SIGNALS,   ""),
-            ("uop",                    "bits_uop_",     UOP_LSU_SIGNALS,    "uop"),
+            # struct_field             sv_port_prefix   signals                 label
+            ("",                       "",              LDQ_FLAT_SIGNALS,       ""),
+            ("uop",                    "bits_uop_",     UOP_LSU_SIGNALS,        "uop"),
         ],
     ),
 
@@ -146,9 +167,9 @@ BLOCKS: list[BlockConfig] = [
         sv_dim_comment = "STQ_SZ",
         dut_path       = "lsu.stq_{e}_",
         groups         = [
-            # struct_field             sv_port_prefix   signals             label
-            ("",                       "",              STQ_FLAT_SIGNALS,   ""),
-            ("uop",                    "bits_uop_",     UOP_LSU_SIGNALS,    "uop"),
+            # struct_field             sv_port_prefix   signals                 label
+            ("",                       "",              STQ_FLAT_SIGNALS,       ""),
+            ("uop",                    "bits_uop_",     UOP_LSU_SIGNALS,        "uop"),
         ],
     ),
 
@@ -163,8 +184,56 @@ BLOCKS: list[BlockConfig] = [
         sv_dim_comment = "UBB_W",
         dut_path       = "core.global_untaint_broadcast_{e}_",
         groups         = [
-            # struct_field             sv_port_prefix   signals             label
-            ("",                       "",              UBB_SIGNALS,        ""),
+            # struct_field             sv_port_prefix   signals                 label
+            ("",                       "",              UBB_SIGNALS,            ""),
+        ],
+    ),
+
+
+    # -------------------------------------------------------------------------
+    # Integer Register Read exe_req
+    # Three separate blocks because Chisel trims each port's uop differently:
+    #   port 0 — ALU/branch/mem (richest), port 1 — simple ALU, port 2 — CSR
+    # -------------------------------------------------------------------------
+    BlockConfig(
+        sv_var     = "irr_req_0",
+        sv_type    = "exe_req_t",
+        sv_comment = "IRR exe_req port 0 (ALU/branch/mem)",
+        n_entries  = 1,
+        dut_path   = "core.iregister_read.io_exe_reqs_0_",
+        groups     = [
+            # struct_field   sv_port_prefix      signals                   label
+            ("",             "",                 EXE_REQ_FLAT_SIGNALS,     ""),
+            ("uop",          "bits_uop_",        UOP_EXE_REQ_0_SIGNALS,    "uop"),
+            ("uop.ctrl",     "bits_uop_ctrl_",   CTRL_SIGNALS_0,           "ctrl"),
+        ],
+    ),
+
+    BlockConfig(
+        sv_var     = "irr_req_1",
+        sv_type    = "exe_req_t",
+        sv_comment = "IRR exe_req port 1 (simple ALU)",
+        n_entries  = 1,
+        dut_path   = "core.iregister_read.io_exe_reqs_1_",
+        groups     = [
+            # struct_field   sv_port_prefix      signals                   label
+            ("",             "",                 EXE_REQ_FLAT_SIGNALS,     ""),
+            ("uop",          "bits_uop_",        UOP_EXE_REQ_1_SIGNALS,    "uop"),
+            ("uop.ctrl",     "bits_uop_ctrl_",   CTRL_SIGNALS_1,           "ctrl"),
+        ],
+    ),
+
+    BlockConfig(
+        sv_var     = "irr_req_2",
+        sv_type    = "exe_req_t",
+        sv_comment = "IRR exe_req port 2 (CSR)",
+        n_entries  = 1,
+        dut_path   = "core.iregister_read.io_exe_reqs_2_",
+        groups     = [
+            # struct_field   sv_port_prefix      signals                   label
+            ("",             "",                 EXE_REQ_FLAT_SIGNALS,     ""),
+            ("uop",          "bits_uop_",        UOP_EXE_REQ_2_SIGNALS,    "uop"),
+            ("uop.ctrl",     "bits_uop_ctrl_",   CTRL_SIGNALS_2,           "ctrl"),
         ],
     ),
 
