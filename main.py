@@ -1,37 +1,35 @@
 """
-main.py — Entry point for grouper.sv generation.
-
-Run:
-    python main.py [--output PATH]
-
-Defaults to writing grouper.sv in the current directory.
+main.py — Entry point. Run: python main.py [-o OUTPUT]
 """
 
 import argparse
 from pathlib import Path
 
-from config import BLOCKS
+from pkg_parser import load_pkg, validate_blocks
 from sv_file import build_sv_file
-
-DEFAULT_OUTPUT = Path("grouper.sv")
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Generate grouper.sv from block configs.")
-    p.add_argument(
-        "--output", "-o",
-        type=Path,
-        default=DEFAULT_OUTPUT,
-        help=f"Output path for grouper.sv (default: {DEFAULT_OUTPUT})",
-    )
-    return p.parse_args()
 
 
 def main() -> None:
-    args = parse_args()
-    sv_content = build_sv_file(BLOCKS)
-    args.output.write_text(sv_content, encoding="utf-8")
-    print(f"Generated {args.output}  ({len(sv_content.splitlines())} lines)")
+    p = argparse.ArgumentParser(description="Generate grouper.sv")
+    p.add_argument("--output", "-o", type=Path, default=Path("grouper.sv"))
+    p.add_argument("--no-validate", action="store_true")
+    args = p.parse_args()
+
+    from grouper_config import PKG, BLOCKS
+    pkg = load_pkg(Path(PKG))
+
+    if not args.no_validate:
+        warnings = validate_blocks(BLOCKS, pkg)
+        for w in warnings:
+            print(f"WARNING: {w}")
+        if warnings:
+            raise SystemExit(1)
+        print(f"Validated {len(BLOCKS)} blocks  "
+              f"({len(pkg.params)} params, {len(pkg.structs)} structs parsed)")
+
+    sv = build_sv_file(BLOCKS, pkg)
+    args.output.write_text(sv, encoding="utf-8")
+    print(f"Generated {args.output}  ({len(sv.splitlines())} lines)")
 
 
 if __name__ == "__main__":

@@ -1,263 +1,302 @@
 """
-generator.py — Core generation logic for grouper.sv.
+generator.py — Walk pkg struct trees, apply config overrides, emit assignments.
 
-Responsibilities:
-  - Recursively expand SignalTree nodes (range expansion, index substitution)
-  - Compute LHS column width for aligned assignments
-  - Emit the assign block for one BlockConfig
+Core algorithm:
+    For each block entry e:
+        Walk the block's struct type recursively from pkg.
+        At each field, apply the matching Override from the config (if any),
+        or use the default walk (prefix concatenation).
+        Collect FlatAssignment records, then emit aligned assign statements.
 
-Scalar vs. array blocks
------------------------
-  n_entries == 1 : scalar — LHS uses sv_var directly,    dut_path used as-is
-  n_entries  > 1 : array  — LHS uses sv_var[e],          dut_path gets {e} substituted
+Default walk rules (no override):
+    leaf field (logic or unknown type):
+        LHS: {struct_path}.{field_name}
+        RHS: {dut_base}{accumulated_prefix}{field_name}
 
-SignalTree expansion
---------------------
-A GroupTuple's signal list may contain:
-  - Signal leaves  : str or tuple[str,str] — emitted directly
-  - Nested nodes   : recursively expand, accumulating LHS field path and
-                     DUT prefix contributions at each level
+    struct field (known typedef):
+        Descend into the sub-struct, appending "{field_name}_" to prefix.
 
-Range expansion on Nested.struct_field (e.g. "exe[0..1]") unrolls the node
-once per index, binding Nested.idx to the current value. All {idx} references
-in dut_prefix strings at that level and any descendant level are substituted.
-Multiple independent ranges at different nesting levels are fully supported —
-each level binds its own named index.
+    array field (field with dim in pkg):
+        Expand over [0..count-1], binding idx name to each value.
 """
 
 import re
 from dataclasses import dataclass
 
-from config import BlockConfig, GroupTuple
-from types_ import Signal, Nested, SignalTree, SELF, resolve as _resolve
+from pkg_parser import PkgInfo, FieldDef
+from types_ import (
+    Block, Override,
+    Scalar, Prefix, ValidWrap, Alias, ArrayField, Skip,
+)
 
 
 # ---------------------------------------------------------------------------
-# Flat assignment record — result of fully expanding one SignalTree path
+# Output record
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class FlatAssignment:
-    """One fully-resolved assign statement ready for emission."""
-    lhs_field:  str   # Dotted field path from sv_var root, e.g. "exe[0].iresp.uop"
-    dut_suffix: str   # Accumulated DUT prefix + signal suffix, e.g. "exe_0_iresp_bits_uop_pdst"
-    label:      str   # Section comment label (empty suppresses the comment line)
+    lhs:   str   # full LHS: "assign sv_var[e].field.subfield"
+    rhs:   str   # full RHS: "dut_path_prefix_signal"
+    label: str   # section comment (empty = suppress)
 
 
 # ---------------------------------------------------------------------------
-# Range helpers
+# Index substitution
 # ---------------------------------------------------------------------------
 
-_RANGE_RE = re.compile(r"^(.+)\[(\d+)\.\.(\d+)\]$")
-
-
-def _parse_range(s: str) -> tuple[str, int, int] | None:
-    """Return (base, lo, hi) if s contains a range annotation, else None."""
-    m = _RANGE_RE.match(s)
-    return (m.group(1), int(m.group(2)), int(m.group(3))) if m else None
-
-
-def _sub(template: str, bindings: dict[str, int]) -> str:
-    """Substitute all active index bindings into a format string."""
-    for name, value in bindings.items():
-        template = template.replace(f"{{{name}}}", str(value))
-    return template
+def _sub(s: str, bindings: dict[str, int | str]) -> str:
+    for k, v in bindings.items():
+        s = s.replace(f"{{{k}}}", str(v))
+    return s
 
 
 # ---------------------------------------------------------------------------
-# SignalTree recursive expansion
+# Core recursive walker
 # ---------------------------------------------------------------------------
 
-def _expand_tree(
-    tree:     SignalTree,
-    lhs_base: str,           # accumulated LHS field path so far
-    dut_base: str,           # accumulated DUT prefix so far
-    label:    str,           # current section label
-    bindings: dict[str, int],# currently active {name: value} index bindings
-) -> list[FlatAssignment]:
+class _Walker:
     """
-    Recursively walk a SignalTree, accumulating LHS and DUT paths.
-    Returns a flat list of FlatAssignment records.
+    Walks a struct type from the pkg, applying Block overrides,
+    and collects FlatAssignment records.
     """
-    out: list[FlatAssignment] = []
 
-    for node in tree:
+    def __init__(self, pkg: PkgInfo, dut_base: str, lhs_base: str,
+                 bindings: dict[str, int | str]):
+        self.pkg      = pkg
+        self.dut_base = dut_base    # e.g. "core.int_issue_unit.slots_3."
+        self.lhs_base = lhs_base    # e.g. "assign int_slots[3]"
+        self.bindings = bindings    # active index bindings {name: value}
+        self.out: list[FlatAssignment] = []
 
-        if isinstance(node, (str, tuple)):
-            # Leaf signal
-            sf, dut_sfx = _resolve(node)
-            lhs = f"{lhs_base}.{sf}" if lhs_base else sf
-            out.append(FlatAssignment(
-                lhs_field  = lhs,
-                dut_suffix = dut_base + _sub(dut_sfx, bindings),
-                label      = label,
-            ))
+    # ------------------------------------------------------------------
+    # Entry point
+    # ------------------------------------------------------------------
 
-        else:
-            # Nested node — resolve prefix, then expand range or recurse directly
-            resolved_prefix = _sub(node.dut_prefix, bindings)
-            rng = _parse_range(node.struct_field)
+    def walk_block(self, block: Block, entry: int | None) -> list[FlatAssignment]:
+        """Walk all fields of block.type, applying block.fields overrides."""
+        self.out = []
+        fields = self.pkg.struct_fields(block.type)
+        top_prefix = _sub(block.chisel.prefix, self.bindings)
 
-            if rng is None:
-                # No range — descend, or emit as leaf if signals is SELF
-                child_lhs = f"{lhs_base}.{node.struct_field}" if lhs_base else node.struct_field
-                if node.signals is SELF:
-                    out.append(FlatAssignment(
-                        lhs_field  = child_lhs,
-                        dut_suffix = dut_base + resolved_prefix,
-                        label      = label,
-                    ))
-                else:
-                    out.extend(_expand_tree(
-                        node.signals,
-                        child_lhs,
-                        dut_base + resolved_prefix,
-                        label,
-                        bindings,
-                    ))
+        for fdef in fields:
+            override = block.fields.get(fdef.name) or block.chisel.fields.get(fdef.name)
+            self._walk_field(
+                fdef        = fdef,
+                lhs_path    = "",
+                dut_prefix  = top_prefix,
+                override    = override,
+                parent_include = block.chisel.include,
+                parent_exclude = block.chisel.exclude,
+                label       = "",
+            )
+        return self.out
+
+    # ------------------------------------------------------------------
+    # Field dispatcher
+    # ------------------------------------------------------------------
+
+    def _walk_field(
+        self,
+        fdef:           FieldDef,
+        lhs_path:       str,            # dotted path so far, e.g. "uop.ctrl"
+        dut_prefix:     str,            # accumulated DUT prefix so far
+        override:       Override | None,
+        parent_include: list[str] | None,
+        parent_exclude: list[str] | None,
+        label:          str,
+    ) -> None:
+        name = fdef.name
+
+        # Apply parent include/exclude filter.
+        # Exception: if this field has an explicit override, always process it —
+        # overrides take precedence over include/exclude lists.
+        has_override = override is not None and not isinstance(override, Skip)
+        if not has_override:
+            if parent_include is not None and name not in parent_include:
+                return
+            if parent_exclude is not None and name in parent_exclude:
+                return
+
+        child_lhs = f"{lhs_path}.{name}" if lhs_path else name
+
+        # Explicit skip
+        if isinstance(override, Skip):
+            return
+
+        # Alias — leaf with a custom DUT signal suffix.
+        # The suffix is relative to the current accumulated dut_prefix,
+        # replacing only the field name portion (not the parent prefix).
+        # This allows aliases inside nested prefix() overrides to work correctly,
+        # e.g. alias("bits_preg") inside prefix("io_untaint_req_") produces
+        # dut_base + "io_untaint_req_" + "bits_preg".
+        # To get a fully absolute suffix (bypassing ALL prefix), use scalar("name").
+        if isinstance(override, Alias):
+            sfx = _sub(override.dut_suffix, self.bindings)
+            rhs = sfx if override.absolute else dut_prefix + sfx
+            self._emit(child_lhs, rhs, label)
+            return
+
+        # Scalar — force leaf regardless of pkg type.
+        # If dut_name is explicitly given, it is absolute (relative to dut_base only),
+        # bypassing the accumulated dut_prefix — same semantics as Alias.
+        # If dut_name is None, fall back to dut_prefix + field_name (default leaf).
+        if isinstance(override, Scalar):
+            if override.dut_name is not None:
+                self._emit(child_lhs, _sub(override.dut_name, self.bindings), label)
             else:
-                # Range expansion — iterate and bind idx
-                base, lo, hi = rng
-                for i in range(lo, hi + 1):
-                    child_lhs     = f"{lhs_base}.{base}[{i}]" if lhs_base else f"{base}[{i}]"
-                    child_prefix  = _sub(node.dut_prefix, {**bindings, node.idx: i})
-                    child_binding = {**bindings, node.idx: i}
-                    if node.signals is SELF:
-                        # Leaf node — the resolved prefix IS the full DUT suffix
-                        out.append(FlatAssignment(
-                            lhs_field  = child_lhs,
-                            dut_suffix = dut_base + child_prefix,
-                            label      = label,
-                        ))
+                self._emit(child_lhs, dut_prefix + name, label)
+            return
+
+        # Array field (from config, not pkg dim)
+        if isinstance(override, ArrayField):
+            count = self.pkg.resolve_count(override.count)
+            for i in range(count):
+                child_lhs_i = f"{child_lhs}[{i}]"
+                new_bindings = {**self.bindings, override.idx: i}
+                sub_pfx = _sub(dut_prefix, new_bindings)
+                elem_pfx = _sub(
+                    (override.element_override.prefix
+                     if isinstance(override.element_override, Prefix)
+                     else dut_prefix + f"{name}_{i}_"),
+                    new_bindings
+                )
+                # Walk element type with new bindings
+                inner = _sub(elem_pfx, new_bindings)
+                sub_walker = _Walker(self.pkg, self.dut_base, self.lhs_base,
+                                     new_bindings)
+                if self.pkg.is_struct(fdef.type_name) and override.element_override is None:
+                    for sub_fdef in self.pkg.struct_fields(fdef.type_name):
+                        sub_walker._walk_field(sub_fdef, child_lhs_i, inner,
+                                               None, None, None, label)
+                elif isinstance(override.element_override, Prefix):
+                    eo = override.element_override
+                    if self.pkg.is_struct(fdef.type_name):
+                        for sub_fdef in self.pkg.struct_fields(fdef.type_name):
+                            sub_ov = eo.fields.get(sub_fdef.name)
+                            sub_walker._walk_field(sub_fdef, child_lhs_i, inner,
+                                                   sub_ov, eo.include, eo.exclude, label)
                     else:
-                        out.extend(_expand_tree(
-                            node.signals,
-                            child_lhs,
-                            dut_base + child_prefix,
-                            label,
-                            child_binding,
-                        ))
+                        sub_walker._emit(child_lhs_i, inner + name, label)
+                self.out.extend(sub_walker.out)
+            return
 
-    return out
+        # Prefix override
+        if isinstance(override, Prefix):
+            resolved_pfx = _sub(override.prefix, self.bindings)
+            if self.pkg.is_struct(fdef.type_name):
+                for sub_fdef in self.pkg.struct_fields(fdef.type_name):
+                    sub_ov = override.fields.get(sub_fdef.name)
+                    self._walk_field(sub_fdef, child_lhs, resolved_pfx,
+                                     sub_ov, override.include, override.exclude, label)
+            else:
+                self._emit(child_lhs, resolved_pfx + name, label)
+            return
 
+        # ValidWrap
+        if isinstance(override, ValidWrap):
+            # Default prefix for valid_wrap: parent_prefix + field_name + "_"
+            # e.g. outer "io_" + field "in_uop" -> "io_in_uop_"
+            default_pfx = dut_prefix + name + "_"
+            resolved_pfx = _sub(override.prefix or default_pfx, self.bindings)
+            # Emit the valid bit directly on the child struct
+            self._emit(f"{child_lhs}.valid", resolved_pfx + "valid", label)
+            # Emit sub-fields with bits_ prefix.
+            # Skip "valid" — it is already emitted as the bundle's valid bit above.
+            if self.pkg.is_struct(fdef.type_name):
+                bits_pfx = resolved_pfx + "bits_"
+                for sub_fdef in self.pkg.struct_fields(fdef.type_name):
+                    if sub_fdef.name == "valid":
+                        continue
+                    sub_ov = override.fields.get(sub_fdef.name)
+                    self._walk_field(sub_fdef, child_lhs, bits_pfx,
+                                     sub_ov, override.include, override.exclude, label)
+            return
 
-def expand_group(
-    struct_field: str,
-    sv_prefix:    str,
-    signals:      SignalTree,
-    label:        str,
-    entry:        int | None = None,
-) -> list[FlatAssignment]:
-    """
-    Expand one GroupTuple into a flat list of FlatAssignments.
+        # Default — no override
+        if fdef.is_array and self.pkg.is_struct(fdef.type_name):
+            # Array field from pkg dim — handled by ArrayField override normally;
+            # default walk just emits a comment placeholder
+            return
 
-    The top-level struct_field/sv_prefix behave like a Nested node at depth 0,
-    so range expansion and index substitution apply here too.
+        if self.pkg.is_struct(fdef.type_name):
+            # Descend into sub-struct with concatenated prefix
+            child_pfx = dut_prefix + name + "_"
+            for sub_fdef in self.pkg.struct_fields(fdef.type_name):
+                self._walk_field(sub_fdef, child_lhs, child_pfx,
+                                 None, None, None, label)
+        else:
+            # Primitive leaf
+            self._emit(child_lhs, dut_prefix + name, label)
 
-    entry is the block entry index (None for scalar blocks). It is made
-    available as {e} for substitution in sv_prefix, allowing patterns like:
-        ("ldq_idx", "ldq_idx_{e}", SELF, "")
-    where the entry index appears inside the signal suffix rather than in
-    dut_path.
-    """
-    bindings = {} if entry is None else {"e": entry}
-    top = Nested(struct_field=struct_field, dut_prefix=sv_prefix, signals=signals)
-    # Wrap in a one-element tree and expand from empty root paths
-    return _expand_tree([top], lhs_base="", dut_base="", label=label, bindings=bindings)
+    # ------------------------------------------------------------------
+    # Leaf emitter
+    # ------------------------------------------------------------------
 
-
-def expand_groups(groups: list[GroupTuple], entry: int | None = None) -> list[FlatAssignment]:
-    """Expand all GroupTuples in a block into a flat FlatAssignment list."""
-    out = []
-    for struct_field, sv_prefix, signals, label in groups:
-        out.extend(expand_group(struct_field, sv_prefix, signals, label, entry=entry))
-    return out
+    def _emit(self, lhs_field: str, dut_suffix: str, label: str) -> None:
+        lhs = f"{self.lhs_base}.{lhs_field}"
+        rhs = self.dut_base + _sub(dut_suffix, self.bindings)
+        self.out.append(FlatAssignment(lhs=lhs, rhs=rhs, label=label))
 
 
 # ---------------------------------------------------------------------------
-# LHS / RHS builders — scalar vs. array aware
+# Block emitter
 # ---------------------------------------------------------------------------
 
-def _full_lhs(block: BlockConfig, entry: int | None, fa: FlatAssignment) -> str:
-    """Build the complete LHS string for one assign statement."""
-    base = block.sv_var if entry is None else f"{block.sv_var}[{entry}]"
-    return f"assign {base}.{fa.lhs_field}"
-
-
-def _dut_base(block: BlockConfig, entry: int | None) -> str:
-    """
-    Build the RHS path prefix for one block entry.
-
-    dut_path may contain {e} as an explicit index placeholder:
-        "core.int_issue_unit.slots_{e}."  ->  slots_3.
-        "lsu.ldq_{e}_"                   ->  ldq_15_
-
-    Scalar blocks (entry=None) use dut_path as-is.
-    Legacy paths without {e} fall back to appending the index directly.
-    """
+def _dut_base(block: Block, entry: int | None, pkg: PkgInfo) -> str:
     if entry is None:
-        return block.dut_path
-    if "{e}" in block.dut_path:
-        # Common case: index embedded in dut_path (e.g. "slots_{e}.")
-        return block.dut_path.format(e=entry)
-    # Index-free dut_path: entry index is carried entirely by group prefixes
-    # using {e} substitution in expand_group (e.g. "ldq_idx_{e}").
-    return block.dut_path
+        return block.path
+    if "{e}" in block.path:
+        return block.path.format(e=entry)
+    return block.path   # index lives in group prefixes
 
 
-# ---------------------------------------------------------------------------
-# Width computation
-# ---------------------------------------------------------------------------
-
-def _entries(block: BlockConfig) -> list[int | None]:
-    """Return [None] for scalars, [0..n-1] for arrays."""
-    return [None] if block.n_entries == 1 else list(range(block.n_entries))
+def _lhs_base(block: Block, entry: int | None, pkg: PkgInfo) -> str:
+    if entry is None:
+        return f"assign {block.var}"
+    return f"assign {block.var}[{entry}]"
 
 
-def compute_lhs_width(block: BlockConfig) -> int:
-    """Return the maximum LHS string length across all assignments in this block."""
-    return max(
-        len(_full_lhs(block, e, fa))
-        for e in _entries(block)
-        for fa in expand_groups(block.groups, entry=e)
-    )
+def emit_block(block: Block, pkg: PkgInfo, indent: str = "  ") -> str:
+    inner  = indent + "  "
+    count  = pkg.resolve_count(block.count)
+    entries: list[int | None] = [None] if count == 1 else list(range(count))
 
+    # Collect all assignments across all entries to compute alignment width
+    all_flat: list[tuple[int | None, FlatAssignment]] = []
+    for e in entries:
+        bindings = {} if e is None else {"e": e}
+        walker = _Walker(
+            pkg      = pkg,
+            dut_base = _dut_base(block, e, pkg),
+            lhs_base = _lhs_base(block, e, pkg),
+            bindings = bindings,
+        )
+        for fa in walker.walk_block(block, e):
+            all_flat.append((e, fa))
 
-# ---------------------------------------------------------------------------
-# Assignment block emitter
-# ---------------------------------------------------------------------------
+    if not all_flat:
+        return ""
 
-def emit_block(block: BlockConfig, indent: str = "  ") -> str:
-    """
-    Emit all assign statements for one BlockConfig as a single string.
-
-    Scalar blocks (n_entries == 1): sv_var.field  = dut_path.signal
-    Array  blocks (n_entries  > 1): sv_var[e].field = dut_path{e}signal
-    """
-    inner   = indent + "  "
-    col_w   = compute_lhs_width(block)
-    entries = _entries(block)
-
+    col_w = max(len(fa.lhs) for _, fa in all_flat)
     lines: list[str] = []
 
-    for e in entries:
-        entry_label = block.sv_comment if e is None else f"{block.sv_comment} — entry {e}"
-        lines.append(f"{indent}// {entry_label}")
+    prev_e = object()   # sentinel
+    seen_labels: set[str] = set()
 
-        flat        = expand_groups(block.groups, entry=e)
-        dut_pfx     = _dut_base(block, e)
-        seen_labels: set[str] = set()
+    for e, fa in all_flat:
+        if e != prev_e:
+            label = block.comment if e is None else f"{block.comment} — entry {e}"
+            lines.append(f"{indent}// {label}")
+            seen_labels = set()
+            prev_e = e
 
-        for fa in flat:
-            if fa.label not in seen_labels:
-                if fa.label:
-                    lines.append(f"{inner}// {fa.label}")
-                seen_labels.add(fa.label)
+        if fa.label not in seen_labels:
+            if fa.label:
+                lines.append(f"{inner}// {fa.label}")
+            seen_labels.add(fa.label)
 
-            lhs = _full_lhs(block, e, fa)
-            rhs = f"{dut_pfx}{fa.dut_suffix}"
-            lines.append(f"{inner}{lhs:<{col_w}} = {rhs};")
+        lines.append(f"{inner}{fa.lhs:<{col_w}} = {fa.rhs};")
 
-        lines.append("")
-
+    lines.append("")
     return "\n".join(lines)
