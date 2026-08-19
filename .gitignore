@@ -1,2 +1,7 @@
 __pycache__/**
-*.sv
+
+# Generated output and private/local package copies — not *.sv in general,
+# since example .sv packages under examples/ and template_pkg.sv are tracked.
+/grouper.sv
+/grouper_old.sv
+/boom_param_pkg.sv

@@ -15,10 +15,14 @@ waveform / testbench, driven by continuous assignments from the real flat
 ports.
 
 ```systemverilog
-bind BoomTile grouper grp (.*);
+bind YourDutModule grouper grp (.*);
 // ...
-soc1.grp.int_slots[3].uop.pdst
+soc1.grp.lanes[3].req.tag
 ```
+
+Clone and run it as-is to see it work — the repo ships with a small
+`template_pkg.sv` / `grouper_config.py` pair, so `python main.py` produces
+a `grouper.sv` immediately, no project of your own required yet.
 
 ## How it works
 
@@ -26,10 +30,12 @@ soc1.grp.int_slots[3].uop.pdst
 |-------------------|-----------------------------------------------------------------------|
 | `pkg_parser.py`   | Parses the SV package: its `package <name>;` declaration, `typedef struct packed` field lists, and `parameter int` values. |
 | `types_.py`       | The small DSL (`scalar`, `prefix`, `valid_wrap`, `alias`, `array`, `skip`) used to describe how a struct maps onto DUT signals. |
-| `grouper_config.py` | **The file you edit.** A list of `Block`s — one per grouped signal/array you want in the output. |
+| `grouper_config.py` | **The file you edit.** A list of `Block`s — one per grouped signal/array you want in the output. Ships as a small runnable template. |
+| `template_pkg.sv` | A minimal example package the template `grouper_config.py` runs against out of the box. |
 | `generator.py`    | Walks each struct type from the pkg, applies the config's overrides, and produces the flat `assign` statements. |
 | `sv_file.py`      | Assembles the final `grouper.sv`: declarations + assignment blocks. |
 | `main.py`         | CLI entry point. |
+| `examples/spt-boom/` | A complete, real-world config — see below. |
 
 The core idea: **only describe what differs from a plain recursive struct
 walk.** By default, a struct field descends into its type with
@@ -68,16 +74,21 @@ Each `Block` describes one grouped variable: an SV struct type, how many
 entries (scalar or array), and where it lives on the DUT.
 
 ```python
-Block("int_slots", "slot_t", "INT_SLOTS",
-      path    = "core.int_issue_unit.slots_{e}.",
-      comment = "Integer issue slots",
+Block("lanes", "lane_t", "NUM_LANES",
+      path    = "dut.pipeline.lane_{e}_",
+      comment = "Example pipeline lanes",
       chisel  = prefix("io_"),
       fields  = {
-          "state":  scalar("state"),
-          "in_uop": valid_wrap(include=[...]),
-          "uop":    prefix("slot_uop_", exclude=[...]),
+          "enable": scalar("enable"),                        # bypasses the "io_" prefix
+          "opcode": skip(),                                   # omitted from output
+          "req":    prefix("io_req_", tag=alias("chip_id")),  # renamed field
+          "resp":   valid_wrap(),                              # Valid-wrapped bundle
+          "queue":  array("Q_DEPTH"),                          # array of sub-bundles
       })
 ```
+
+(this is the template shipped in `grouper_config.py` — run `python main.py`
+and read the generated `grouper.sv` alongside it)
 
 | Override                | Meaning                                                                 |
 |--------------------------|--------------------------------------------------------------------------|
@@ -88,10 +99,12 @@ Block("int_slots", "slot_t", "INT_SLOTS",
 | `array(count, element_override=, idx="i")` | Expand this field over `count` elements (int or pkg param name).      |
 | `skip()`                 | Omit this field entirely.                                              |
 
-See `types_.py` for full docstrings and `grouper_config.py` for a complete,
-real-world example (issue slots, load/store queues, a maptable, and a
-taint-tracking broadcast bus from [SPT-BOOM](https://github.com/RPTU-EIS),
-a security-extended RISC-V BOOM core).
+See `types_.py` for full docstrings, and
+[`examples/spt-boom/grouper_config.py`](examples/spt-boom/grouper_config.py)
+for a complete, real-world config (issue slots, load/store queues, a
+maptable, and a taint-tracking broadcast bus from
+[SPT-BOOM](https://github.com/RPTU-EIS), a security-extended RISC-V BOOM
+core) exercising every override.
 
 ## Requirements
 
