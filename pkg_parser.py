@@ -29,6 +29,7 @@ class FieldDef:
 
 @dataclass
 class PkgInfo:
+    name:    str
     params:  dict[str, int]
     structs: dict[str, list[FieldDef]]
 
@@ -62,6 +63,7 @@ _PARAM_RE = re.compile(
     re.MULTILINE,
 )
 _CLOG2_RE = re.compile(r"\$clog2\(([^)]+)\)")
+_PKG_NAME_RE = re.compile(r"^\s*package\s+(\w+)\s*;", re.MULTILINE)
 
 
 def _eval_expr(expr: str, params: dict[str, int]) -> int:
@@ -145,7 +147,11 @@ def _parse_structs(text: str) -> dict[str, list[FieldDef]]:
 
 def load_pkg(path: Path) -> PkgInfo:
     text = path.read_text(encoding="utf-8")
+    name_m = _PKG_NAME_RE.search(text)
+    if not name_m:
+        raise ValueError(f"No 'package <name>;' declaration found in {path}")
     return PkgInfo(
+        name    = name_m.group(1),
         params  = _parse_params(text),
         structs = _parse_structs(text),
     )

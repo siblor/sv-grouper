@@ -16,7 +16,6 @@ Override objects let you deviate from any of these defaults per field.
 
 from __future__ import annotations
 from dataclasses import dataclass, field as dc_field
-from typing import Callable
 
 
 # ---------------------------------------------------------------------------

@@ -3,9 +3,8 @@ sv_file.py — Assembles the complete grouper.sv file.
 """
 
 from datetime import date
-from pathlib import Path
 
-from pkg_parser import PkgInfo, load_pkg
+from pkg_parser import PkgInfo
 from types_ import Block
 from generator import emit_block
 
@@ -30,13 +29,13 @@ _HEADER = """\
 //
 // Groups flat Chisel-generated signals into typed SV structs for verification.
 //
-// Usage:  soc1.grp.int_slots[3].uop.pdst
-// Bind:   bind BoomTile grouper grp (.*);
+// Usage:  <dut_instance>.grp.int_slots[3].uop.pdst
+// Bind:   bind <YourDutModule> grouper grp (.*);
 //
-// Developed for SPT-BOOM — https://github.com/RPTU-EIS/SPT-BOOM
+// Developed for SPT-BOOM, a security-extended RISC-V BOOM core.
 // =============================================================================
 
-import boom_param_pkg::*;
+import {pkg_name}::*;
 
 module grouper #()
 (
@@ -49,7 +48,7 @@ _FOOTER = "endmodule\n"
 
 
 def build_sv_file(blocks: list[Block], pkg: PkgInfo, indent: str = "  ") -> str:
-    sections = [_HEADER.format(date=date.today().isoformat())]
+    sections = [_HEADER.format(date=date.today().isoformat(), pkg_name=pkg.name)]
 
     # Declarations
     decl_lines = ["  // Grouped signal variables"]

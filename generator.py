@@ -20,7 +20,6 @@ Default walk rules (no override):
         Expand over [0..count-1], binding idx name to each value.
 """
 
-import re
 from dataclasses import dataclass
 
 from pkg_parser import PkgInfo, FieldDef
@@ -154,15 +153,12 @@ class _Walker:
             for i in range(count):
                 child_lhs_i = f"{child_lhs}[{i}]"
                 new_bindings = {**self.bindings, override.idx: i}
-                sub_pfx = _sub(dut_prefix, new_bindings)
-                elem_pfx = _sub(
+                inner = _sub(
                     (override.element_override.prefix
                      if isinstance(override.element_override, Prefix)
                      else dut_prefix + f"{name}_{i}_"),
                     new_bindings
                 )
-                # Walk element type with new bindings
-                inner = _sub(elem_pfx, new_bindings)
                 sub_walker = _Walker(self.pkg, self.dut_base, self.lhs_base,
                                      new_bindings)
                 if self.pkg.is_struct(fdef.type_name) and override.element_override is None:
