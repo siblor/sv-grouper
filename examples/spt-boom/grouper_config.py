@@ -1,6 +1,6 @@
 """
 examples/spt-boom/grouper_config.py — a complete, real-world sv-grouper
-config, used to verify SPT-BOOM (github.com/RPTU-EIS), a security-extended
+config, used to verify SPT-BOOM (github.com/RPTU-EIS/SPT-BOOM), a security-extended
 RISC-V BOOM core. Kept here for reference — it exercises every DSL override.
 This is not runnable as-is: it needs a copy of SPT-BOOM's boom_param_pkg.sv
 next to it, and this directory added to PYTHONPATH (or copy both files to

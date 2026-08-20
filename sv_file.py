@@ -32,7 +32,7 @@ _HEADER = """\
 // Usage:  <dut_instance>.grp.int_slots[3].uop.pdst
 // Bind:   bind <YourDutModule> grouper grp (.*);
 //
-// Developed for SPT-BOOM, a security-extended RISC-V BOOM core.
+// Developed for SPT-BOOM — https://github.com/RPTU-EIS/SPT-BOOM
 // =============================================================================
 
 import {pkg_name}::*;

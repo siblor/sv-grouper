@@ -1,7 +1,7 @@
 # examples/spt-boom
 
 A complete, real-world `grouper_config.py`, written for
-[SPT-BOOM](https://github.com/RPTU-EIS), a security-extended RISC-V BOOM
+[SPT-BOOM](https://github.com/RPTU-EIS/SPT-BOOM), a security-extended RISC-V BOOM
 core with taint-tracking extensions. It's kept here for reference — it's
 the config that motivated most of the DSL (`prefix`, `valid_wrap`, `alias`,
 `array`, `scalar`, `skip`, include/exclude lists) and covers issue slots,
